@@ -24,7 +24,7 @@ DATA_DIR = os.path.join(OUTPUT_DIR, "data")
 DRILLDOWN_DIR = os.path.join(OUTPUT_DIR, "graphs", "drilldown")  # used later by other stages
 SUMMARY_DIR = os.path.join(OUTPUT_DIR, "graphs", "summary")      # used later by other stages
 
-MASTER_CSV_PATH = 'GRT Operations (operations.grt) (6).csv'
+MASTER_CSV_PATH = 'GRT Operations (operations.grt) (8).csv'
 OUTPUT_QUANTITATIVE_JSON = os.path.join(DATA_DIR, 'quantitative_results.json')
 OUTPUT_QUALITATIVE_JSON = os.path.join(DATA_DIR, 'qualitative_analysis.json')
 
@@ -32,18 +32,21 @@ DIMENSIONS_TO_ANALYZE = ['Relevance', 'Correctness', 'Completeness']
 MAX_WORKERS = 2
 
 # Configure client focus and model mappings
-CLIENT_MODEL_NAME = 'Meta Llama 4 Maverick'
+CLIENT_MODEL_NAME = 'Gemini 2.5 pro'
 
+# Step 0.1 (Why): Align model identifiers with the actual CSV headers so schema validation and downstream logic work.
+#                 The provided CSV contains "Chatgpt", "Gemini", and "Claude" model columns.
+# Step 0.1 (Done): Updated mappings to match CSV; removed "Ollama" and "Grok".
 MODEL_MAPPING = {
-    'Ollama': 'Ollama',
-    'Grok': 'Grok',
+    'Chatgpt': 'Chatgpt',
     'Gemini': 'Gemini',
     'Claude': 'Claude'
 }
 
+# Step 0.2 (Why): Provide human-friendly display names for current models used in narratives and prompts.
+# Step 0.2 (Done): Display names updated; client model remains Gemini 2.5 pro.
 MODEL_DISPLAY_NAMES = {
-    'Ollama': 'Meta Llama 4 Maverick',
-    'Grok': 'xAI Grok 4',
+    'Chatgpt': 'OpenAI o4-mini-high',
     'Gemini': 'Gemini 2.5 pro',
     'Claude': 'Claude Opus 4'
 }
@@ -127,6 +130,10 @@ class ConfigurationAgent:
     def __init__(self):
         self.validated_schema = False
         self.optimal_workers = MAX_WORKERS
+        # Step 3.1 (Why): Track which models/dimensions are actually present to allow partial datasets.
+        # Step 3.1 (Done): Initialize containers for availability reporting.
+        self.available_models: List[str] = []
+        self.available_dimensions_by_model: Dict[str, List[str]] = {}
 
     def validate_master_csv_schema(self, file_path: str) -> bool:
         try:
@@ -136,21 +143,42 @@ class ConfigurationAgent:
                 print(f"❌ Missing base columns: {missing_base_cols}")
                 return False
 
-            missing_cols = []
+            # Step 3.1 (Why): Relax model-column validation so we continue even if some models/dimensions are missing.
+            #                 This allows running when only Python rows or a subset of models are present.
+            # Step 3.1 (Done): Log warnings for missing columns; require at least one score column overall.
+            missing_cols: List[str] = []
+            present_models: set[str] = set()
+            dims_by_model: Dict[str, List[str]] = {m: [] for m in MODEL_NAMES}
+            any_score_present = False
+
             for model_name in MODEL_MAPPING.keys():
                 for dimension in DIMENSIONS_TO_ANALYZE:
                     score_col = f"{model_name} Human {dimension}"
                     just_col = get_justification_column_name(model_name, dimension)
-                    if score_col not in df.columns:
+                    if score_col in df.columns:
+                        any_score_present = True
+                        present_models.add(model_name)
+                        dims_by_model[model_name].append(dimension)
+                    else:
                         missing_cols.append(score_col)
                     if just_col not in df.columns:
                         missing_cols.append(just_col)
-            if missing_cols:
-                print(f"❌ Missing model columns: {missing_cols}")
+
+            if not any_score_present:
+                print("❌ No model score columns detected. Ensure at least one '<Model> Human <Dimension>' column exists.")
                 return False
 
+            if missing_cols:
+                print(f"⚠️ Some model columns are missing (processing will continue with available data): {missing_cols}")
+
+            self.available_models = sorted(present_models)
+            self.available_dimensions_by_model = {m: dims_by_model.get(m, []) for m in MODEL_NAMES}
+
             self.validated_schema = True
-            print(f"✅ Schema validation passed. Rows={len(df)}, Cols={len(df.columns)}")
+            print(
+                f"Schema validation passed. Rows={len(df)}, Cols={len(df.columns)} | "
+                f"Available models={self.available_models}"
+            )
             return True
         except FileNotFoundError:
             print(f"❌ Master CSV not found: {file_path}")
@@ -218,14 +246,40 @@ class DataSlicerTool:
                         scores['score_3'],
                         scores['total_scores']
                     ))
+                # Sort for ranking display (5s, then 4s, then 3s)
                 model_scores.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
-                if model_scores:
-                    top = model_scores[0]
+
+                if not model_scores:
+                    continue
+
+                # Step (Tie Logic): Determine if there is a tie on top 5s
+                top_fives = model_scores[0][1]
+                tied = [m for m in model_scores if m[1] == top_fives]
+
+                if len(tied) == 1:
+                    top = tied[0]
                     winners[domain_lang][dimension] = {
+                        'is_tie': False,
                         'winner': top[0],
                         'winner_5s': top[1],
                         'winner_4s': top[2],
                         'winner_3s': top[3],
+                        'ranking': [m[0] for m in model_scores]
+                    }
+                else:
+                    # Multi-model tie by number of 5s
+                    winners[domain_lang][dimension] = {
+                        'is_tie': True,
+                        'winners': [
+                            {
+                                'model': m[0],
+                                'score_5': m[1],
+                                'score_4': m[2],
+                                'score_3': m[3],
+                                'total_scores': m[4]
+                            } for m in tied
+                        ],
+                        'top_5s': top_fives,
                         'ranking': [m[0] for m in model_scores]
                     }
         return winners
@@ -338,17 +392,17 @@ class EDAValidatorAgent:
 
     def _generate_eda_report(self, state: AnalysisState, warnings: List[str], missing_just: Dict[str, List[int]]) -> str:
         lines: List[str] = []
-        lines.append(f"📊 **Data Overview for {state.domain} ({state.language}) - {state.dimension}**")
+        lines.append(f"Data Overview for {state.domain} ({state.language}) - {state.dimension}")
         lines.append(f"   - Total data points: {len(state.data_slice)}")
         if 'Prompt ID' in state.data_slice.columns:
             lines.append(f"   - Unique prompts: {state.data_slice['Prompt ID'].nunique()}")
         if missing_just:
-            lines.append("\n⚠️ **Missing Justifications Detected:**")
+            lines.append("\nMissing Justifications Detected:")
             for model_name, prompt_ids in missing_just.items():
                 lines.append(f"   - {model_name}: {len(prompt_ids)} missing justifications (Prompts: {prompt_ids})")
         else:
-            lines.append("\n✅ **Justifications Complete:** All justifications present")
-        lines.append("\n📈 **Score Distribution Summary:**")
+            lines.append("\nJustifications Complete: All justifications present")
+        lines.append("\nScore Distribution Summary:")
         for model_name in MODEL_NAMES:
             score_col = f"{model_name} Human {state.dimension}"
             if score_col in state.data_slice.columns:
@@ -358,7 +412,7 @@ class EDAValidatorAgent:
                     dist_str = ', '.join([f"{score}: {count}" for score, count in sorted(score_counts.items())])
                     lines.append(f"   - {model_name}: {dist_str}")
         if warnings:
-            lines.append("\n⚠️ **Validation Warnings:**")
+            lines.append("\nValidation Warnings:")
             for w in warnings:
                 lines.append(f"   - {w}")
         return '\n'.join(lines)
@@ -418,8 +472,16 @@ class AnalysisAgent:
         if 'winners' in state.quantitative_context and domain_key in state.quantitative_context['winners']:
             if state.dimension in state.quantitative_context['winners'][domain_key]:
                 w = state.quantitative_context['winners'][domain_key][state.dimension]
-                winner_display_name = MODEL_DISPLAY_NAMES[w['winner']]
-                winner_info = f"**Winner**: {winner_display_name} ({w['winner_5s']} fives)\n"
+                if w['is_tie']:
+                    winner_info = "**Winner**: Multiple models tied for the top performance.\n"
+                    winner_info += "   - Top 5s: " + str(w['top_5s']) + "\n"
+                    winner_info += "   - Winners:\n"
+                    for winner_info_item in w['winners']:
+                        winner_display_name = MODEL_DISPLAY_NAMES[winner_info_item['model']]
+                        winner_info += f"     - {winner_display_name} (5s: {winner_info_item['score_5']})\n"
+                else:
+                    winner_display_name = MODEL_DISPLAY_NAMES[w['winner']]
+                    winner_info = f"**Winner**: {winner_display_name} ({w['winner_5s']} fives)\n"
 
         prompt = f"""
 You are an expert data analyst comparing LLM performance based on the provided CSV data.
@@ -437,13 +499,38 @@ The data covers the '{state.domain}' industry for the '{state.language}' languag
 ```
 
 **Your Task:**
-1.  **Declare the Winner:**
-    - Your response MUST start with the sentence: "The winner is [MODEL_NAME]."
-    - Add a brief analysis of why that model won and include the number of 5s.
+Analyze the CSV data and provide a comprehensive analysis following these instructions in the exact order given:
+
+1.  **Declare the Winner (or Tie):**
+    - Determine the winner as the model with the most '5' ratings for '{state.dimension}'. If two or more models share the same maximum number of '5' ratings, declare a tie.
+    - If there is a single winner, your response MUST start with: "The winner is [MODEL_NAME]."
+    - If there is a tie, your response MUST start with: "The winners are [MODEL_NAME_1], [MODEL_NAME_2], ... (tie)."
+    - Add a brief, positive analysis (2-3 sentences) explaining the result, including the exact number of 5s.
+    - **IMPORTANT**: Include the specific number of 5s achieved by the winner(s) in your explanation.
+
 2.  **Analyze {CLIENT_MODEL_NAME}'s Performance:**
     - This section MUST start with the exact sentence: "{CLIENT_MODEL_NAME} has the following performance in the {state.domain} industry :"
-    - For each unique 'Prompt ID', write a short paragraph mentioning specific scores and using justifications.
-3. **Integrate EDA Findings** as needed.
+    - For each unique 'Prompt ID', write a flowing paragraph (not bullet points) that follows this format:
+      "Prompt ID [NUMBER] ([DESCRIPTIVE TITLE]): [ANALYSIS]"
+    - Create a descriptive title for each prompt based on the prompt content (e.g., "Simple 2D Physics Engine", "User Authentication System").
+    - **CRITICAL**: In your analysis, ALWAYS mention the specific scores received (e.g., "received two 5's", "earned one perfect score", "achieved three 5 ratings").
+    - Write in a narrative, analytical style similar to a performance review.
+    - **Content Guidelines:**
+        - If the ratings include a '5': Start by acknowledging the positive achievement with specific numbers ("While {CLIENT_MODEL_NAME} received [X] 5's for this prompt..."), then focus on negative feedback and areas for improvement.
+        - If the ratings include **NO '5's**: Focus entirely on weaknesses and shortcomings. Do not mention any positives.
+    - Use the justifications from the CSV as evidence, but synthesize them into flowing analysis rather than just quoting.
+    - Each prompt analysis should be 3-4 sentences that provide context, performance assessment, and implications.
+    - Use sophisticated analytical language and provide insights into what the performance means for real-world applications.
+
+3. **Integration of EDA Findings:**
+    - If the EDA report mentions missing justifications, acknowledge this in your analysis by noting where data gaps exist.
+    - If there are validation warnings, briefly mention their potential impact on the analysis reliability.
+    - Use the EDA insights to provide more nuanced interpretation of the results.
+
+**Important Notes:**
+- Pay close attention to the EDA validation report above, which has already analyzed the data for completeness and quality.
+- If missing justifications are noted for specific prompts, mention this limitation in your analysis of those prompts.
+- Maintain analytical rigor while acknowledging data quality issues identified by our validation process.
 """
         return prompt
 
@@ -560,8 +647,8 @@ class ReportAggregator:
             json.dump(self.quantitative_entries, f, indent=2, ensure_ascii=False)
         with open(OUTPUT_QUALITATIVE_JSON, 'w', encoding='utf-8') as f:
             json.dump(self.qualitative_entries, f, indent=2, ensure_ascii=False)
-        print(f"✅ Wrote quantitative → {OUTPUT_QUANTITATIVE_JSON}")
-        print(f"✅ Wrote qualitative → {OUTPUT_QUALITATIVE_JSON}")
+        print(f"Wrote quantitative -> {OUTPUT_QUANTITATIVE_JSON}")
+        print(f"Wrote qualitative -> {OUTPUT_QUALITATIVE_JSON}")
 
 
 # ---------------------------------------------------------------------------------
@@ -570,7 +657,7 @@ class ReportAggregator:
 # Step 10 (Done): End-to-end run creating the two JSON contract files
 
 def main():
-    print("🚀 analysis_generator starting (Stage 1)")
+    print("analysis_generator starting (Stage 1)")
     ensure_dirs()
 
     # Initialize config and validate schema
