@@ -1,0 +1,14 @@
+# Step 1: Ignore environment files so secrets and machine-specific configs are not committed.
+# Why: .env files often contain API keys and private configuration that must not be pushed.
+# Result: Git will ignore common dotenv files and variants by default.
+
+# Common dotenv files
+.env
+.env.*
+*.env
+*.env.*
+.envrc
+
+# Allow example/template env files to be committed for configuration reference
+!.env.example
+!*.env.example 
