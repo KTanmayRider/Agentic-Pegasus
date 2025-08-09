@@ -1,0 +1,29 @@
+[
+  {
+    "analysis_id": "Python-ALL-Relevance",
+    "language": "Python",
+    "domain": "ALL",
+    "dimension": "Relevance",
+    "winner_text": "Machine Learning: The top performers are OpenAI o4-mini-high and Claude Opus 4, as they tied for the most perfect relevance scores. FinTech: The top performer is OpenAI o4-mini-high, clearly receiving the most ratings of 5. EdTech: The top performers are Gemini 2.5 pro and Claude Opus 4, both achieving a perfect relevance score on every prompt.",
+    "client_performance_text": "Gemini 2.5 pro's performance on Python tasks is inconsistent across different industries. It demonstrates exceptional relevance in the EdTech sector, perfectly addressing complex prompts like adaptive learning engines and knowledge graph systems. However, its performance significantly weakens in the FinTech domain, where it often fails to fully meet the requirements for tasks such as building fraud detection frameworks.",
+    "is_error": false
+  },
+  {
+    "analysis_id": "Python-ALL-Completeness",
+    "language": "Python",
+    "domain": "ALL",
+    "dimension": "Completeness",
+    "winner_text": "Machine Learning: The top performer is Claude Opus 4, securing the most perfect scores for completeness. FinTech: The top performer is Claude Opus 4, achieving the highest number of top ratings. EdTech: The top performer is Claude Opus 4, as it was the only model to receive perfect scores for completeness.",
+    "client_performance_text": "Gemini 2.5 pro's performance on completeness is capable but inconsistent across industries. It frequently delivers highly comprehensive solutions for complex Machine Learning tasks, such as multi-agent reinforcement learning systems. However, it struggles more with FinTech applications, sometimes providing incomplete logic for prompts related to option pricing and fraud detection frameworks, which resulted in lower ratings.",
+    "is_error": false
+  },
+  {
+    "analysis_id": "Python-ALL-Correctness",
+    "language": "Python",
+    "domain": "ALL",
+    "dimension": "Correctness",
+    "winner_text": "Machine Learning: The top performer is Claude Opus 4, showing strong correctness on complex AI implementations. FinTech: The top performer is OpenAI o4-mini-high, particularly for its implementation of quantitative finance tasks. EdTech: The top performers are Gemini 2.5 pro and Claude Opus 4, which are tied for the most perfect scores.",
+    "client_performance_text": "Gemini 2.5 pro demonstrates strong but inconsistent correctness for Python code generation. It excels in the Machine Learning domain, producing highly-rated, functional code for complex tasks like reinforcement learning and time-series anomaly detection. However, its performance falters in the FinTech sector, where its solutions sometimes fail to meet specific technical requirements such as real API integration or correct model loading procedures.",
+    "is_error": false
+  }
+]

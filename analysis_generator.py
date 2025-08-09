@@ -27,6 +27,7 @@ SUMMARY_DIR = os.path.join(OUTPUT_DIR, "graphs", "summary")      # used later by
 MASTER_CSV_PATH = 'GRT Operations (operations.grt) (8).csv'
 OUTPUT_QUANTITATIVE_JSON = os.path.join(DATA_DIR, 'quantitative_results.json')
 OUTPUT_QUALITATIVE_JSON = os.path.join(DATA_DIR, 'qualitative_analysis.json')
+OUTPUT_OVERALL_QUAL_JSON = os.path.join(DATA_DIR, 'overall_qualitative_analysis.json')
 
 DIMENSIONS_TO_ANALYZE = ['Relevance', 'Correctness', 'Completeness']
 MAX_WORKERS = 2
@@ -103,6 +104,7 @@ class AnalysisState:
     missing_justifications: Dict[str, List[int]] = field(default_factory=dict)
     winner_text: str = ""
     client_performance_text: str = ""
+    is_overall: bool = False
 
     def __post_init__(self):
         if not isinstance(self.data_slice, pd.DataFrame):
@@ -284,6 +286,37 @@ class DataSlicerTool:
                     }
         return winners
 
+    def create_overall_states(self, master_df: pd.DataFrame) -> List['AnalysisState']:
+        overall_states: List[AnalysisState] = []
+        base_columns = [col for col in COLUMN_NAMES.values() if col in master_df.columns]
+        for language, lang_df in master_df.groupby(COLUMN_NAMES['language']):
+            if pd.isna(language):
+                continue
+            for dimension in DIMENSIONS_TO_ANALYZE:
+                required_columns = base_columns.copy()
+                for model_name in MODEL_MAPPING.keys():
+                    score_col = f"{model_name} Human {dimension}"
+                    just_col = get_justification_column_name(model_name, dimension)
+                    if score_col in master_df.columns:
+                        required_columns.append(score_col)
+                    if just_col in master_df.columns:
+                        required_columns.append(just_col)
+                # Use full language slice across all domains for this dimension
+                filtered_df = lang_df[required_columns].copy()
+                if filtered_df.empty:
+                    continue
+                context = {'results': {}, 'winners': {}}
+                # Aggregate winners across domains for this language-dimension (optional, keep empty for simplicity)
+                overall_states.append(AnalysisState(
+                    language=str(language),
+                    domain="ALL",
+                    dimension=dimension,
+                    data_slice=filtered_df,
+                    quantitative_context=context,
+                    is_overall=True
+                ))
+        return overall_states
+
     def create_analysis_states(self, master_df: pd.DataFrame) -> List['AnalysisState']:
         self.compute_quantitative_analysis(master_df)
 
@@ -318,6 +351,8 @@ class DataSlicerTool:
                     data_slice=filtered_df,
                     quantitative_context=context
                 ))
+        # Append overall language-level states
+        states.extend(self.create_overall_states(master_df))
         return states
 
 
@@ -433,10 +468,19 @@ class AnalysisAgent:
             with io.StringIO() as buffer:
                 state.data_slice.to_csv(buffer, index=False)
                 csv_string = buffer.getvalue()
-            prompt = self._create_enhanced_prompt(state, csv_string)
+            if state.is_overall:
+                prompt = self._create_overall_prompt(state, csv_string)
+            else:
+                prompt = self._create_enhanced_prompt(state, csv_string)
             response = self.model.generate_content(prompt)
             full_text = (response.text or "").strip()
             state.analysis_report = full_text
+            if state.is_overall:
+                # Extract compact winner sentence and Gemini-only overall paragraph
+                winner_line, gemini_overall = self._extract_overall_sections(full_text)
+                state.winner_text = winner_line
+                state.client_performance_text = gemini_overall
+                return state
             # naive parsing based on required leading sentences
             client_header = f"{CLIENT_MODEL_NAME} has the following performance"
             idx = full_text.find(client_header)
@@ -534,6 +578,48 @@ Analyze the CSV data and provide a comprehensive analysis following these instru
 """
         return prompt
 
+    def _create_overall_prompt(self, state: AnalysisState, csv_data: str) -> str:
+        # Overall prompt distilled from the provided example and requirements
+        return f"""
+You are assisting in a human evaluation project comparing OpenAI o4-mini-high, Gemini 2.5 pro, and Claude Opus 4.
+We have collected ratings for the '{state.dimension}' dimension from multiple evaluators across multiple topics.
+Analyze the CSV for ALL industries within Language='{state.language}'. Do not reference Prompt IDs.
+
+Tasks (do not repeat or restate these instructions in your output):
+1) For each Industry present in the CSV (within Language='{state.language}'), identify the TOP performer (most number of 5s for '{state.dimension}'). For each industry, write ONE very short sentence: "[Industry]: The top performer is [MODEL_DISPLAY_NAME]." Optionally add one short justification phrase.
+2) Then write EXACTLY ONE short paragraph (3-4 lines) describing the overall performance of Gemini 2.5 pro across all industries for Language='{state.language}' and '{state.dimension}'. No bullets. Mention one topic Gemini is good at and one topic it is bad at. Do not reference prompt IDs.
+3) Keep everything concise. No extra sections. Begin directly with the industry sentences, followed by the single Gemini paragraph.
+
+CSV:
+```csv
+{csv_data}
+```
+"""
+
+    def _extract_overall_sections(self, full_text: str) -> tuple[str, str]:
+        # Winner line: first non-empty line(s) until a blank, then Gemini paragraph
+        lines = [l.strip() for l in full_text.splitlines()]
+        lines = [l for l in lines if l]
+        winner_lines: List[str] = []
+        gemini_paragraph = ""
+        # Collect industry lines until we hit a line starting with 'Overall' or 'Gemini'
+        i = 0
+        while i < len(lines) and not lines[i].lower().startswith("overall") and not lines[i].lower().startswith("gemini"):
+            winner_lines.append(lines[i])
+            i += 1
+        # Remaining lines form the Gemini paragraph; join and then filter to only the Gemini overall part if prefixed by Overall,/Gemini
+        remaining = " ".join(lines[i:]).strip()
+        # Keep only the paragraph about Gemini (heuristic: start at first 'Overall, Gemini' or 'Gemini 2.5 pro')
+        lowered = remaining.lower()
+        start_idx = max(lowered.find("overall, gemini"), lowered.find("overall gemini"), lowered.find("gemini 2.5 pro"))
+        if start_idx != -1:
+            gemini_paragraph = remaining[start_idx:].strip()
+        else:
+            gemini_paragraph = remaining
+        # Winner line collapsed to single line
+        winner_line = " ".join(winner_lines).strip()
+        return winner_line, gemini_paragraph
+
 
 # ---------------------------------------------------------------------------------
 # Step 7 (Why): Error handler for resilience
@@ -600,6 +686,7 @@ class ReportAggregator:
         self.slicer = slicer
         self.quantitative_entries: List[Dict[str, Any]] = []
         self.qualitative_entries: List[Dict[str, Any]] = []
+        self.overall_entries: List[Dict[str, Any]] = []
 
     def collect_quantitative(self):
         entries: List[Dict[str, Any]] = []
@@ -628,9 +715,10 @@ class ReportAggregator:
 
     def collect_qualitative(self, completed_states: List[AnalysisState]):
         q_entries: List[Dict[str, Any]] = []
+        overall_entries: List[Dict[str, Any]] = []
         for s in completed_states:
             analysis_id = make_analysis_id(s.language, s.domain, s.dimension)
-            q_entries.append({
+            entry = {
                 'analysis_id': analysis_id,
                 'language': s.language,
                 'domain': s.domain,
@@ -638,8 +726,13 @@ class ReportAggregator:
                 'winner_text': s.winner_text,
                 'client_performance_text': s.client_performance_text,
                 'is_error': bool(s.error_message)
-            })
+            }
+            if getattr(s, 'is_overall', False):
+                overall_entries.append(entry)
+            else:
+                q_entries.append(entry)
         self.qualitative_entries = q_entries
+        self.overall_entries = overall_entries
 
     def save_json_contracts(self):
         ensure_dirs()
@@ -647,8 +740,11 @@ class ReportAggregator:
             json.dump(self.quantitative_entries, f, indent=2, ensure_ascii=False)
         with open(OUTPUT_QUALITATIVE_JSON, 'w', encoding='utf-8') as f:
             json.dump(self.qualitative_entries, f, indent=2, ensure_ascii=False)
+        with open(OUTPUT_OVERALL_QUAL_JSON, 'w', encoding='utf-8') as f:
+            json.dump(self.overall_entries, f, indent=2, ensure_ascii=False)
         print(f"Wrote quantitative -> {OUTPUT_QUANTITATIVE_JSON}")
         print(f"Wrote qualitative -> {OUTPUT_QUALITATIVE_JSON}")
+        print(f"Wrote overall qualitative -> {OUTPUT_OVERALL_QUAL_JSON}")
 
 
 # ---------------------------------------------------------------------------------
@@ -698,6 +794,7 @@ def main():
                     dimension=res.get('dimension', 'Unknown'),
                     data_slice=pd.DataFrame(),
                 )
+                s.is_overall = bool(res.get('is_overall', False))
                 s.eda_report = res.get('eda_report', '')
                 s.analysis_report = res.get('analysis_report', '')
                 s.error_message = res.get('error_message', '')
