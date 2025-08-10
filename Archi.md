@@ -15,9 +15,10 @@ The overall process will be executed as follows:
 1.  **Run `python analysis_generator.py`:**
     *   **Input:** `GRT Operations (operations.grt) (2).csv` (The master data file).
     *   **Output:**
-        *   `output/data/quantitative_results.json`: A structured JSON with aggregated scores, winners, and rankings for every combination.
+        *   `output/data/quantitative_results.json`: A structured JSON with aggregated scores, winners, rankings, and per-topic breakdowns for every combination.
         *   `output/data/qualitative_analysis.json`: A structured JSON containing the detailed, AI-generated textual analysis for each combination. **This is the critical data contract.**
         *   `output/data/overall_qualitative_analysis.json`: Concise, language-level overall justifications per dimension, containing short industry winner lines and a single paragraph summarizing Gemini’s overall performance.
+        *   `output/data/RLHF_data_analyzed_by_topic.csv`: Helper CSV (wide format) to inspect per-topic counts of 5s by model/dimension. Note: the long-format CSV is not generated.
 
 2.  **Run `python graph_generator.py`:**
     *   **Input:**
@@ -31,7 +32,7 @@ The overall process will be executed as follows:
     *   **Input:**
         *   `output/data/qualitative_analysis.json` (The text).
         *   `output/data/overall_qualitative_analysis.json` (Concise overall justifications; optional but recommended for executive summaries).
-        *   `output/data/quantitative_results.json` (For tables).
+        *   `output/data/quantitative_results.json` (For tables and per-topic plotting).
         *   The `output/graphs/` directory (The images).
     *   **Output:** `Final_Analysis_Report.docx`
 
@@ -47,7 +48,7 @@ Identical to your current script: `Initialize -> Slice Data -> Concurrently Vali
 **Agent-Level Architecture:**
 
 *   **`ConfigurationAgent`**: No changes. Handles initial setup.
-*   **`DataSlicerTool`**: Extended. In addition to per-`Language` + `Industry` + `Dimension` slices, it now creates language-level "overall" slices per `Language` + `Dimension` (domain set to `ALL`) to power concise overall justifications.
+*   **`DataSlicerTool`**: Extended. In addition to per-`Language` + `Industry` + `Dimension` slices, it now creates language-level "overall" slices per `Language` + `Dimension` (domain set to `ALL`) to power concise overall justifications. It also computes a per-topic breakdown under each analysis unit for graphing.
 *   **`EDAValidatorAgent`**: No changes. Performs data quality checks on each slice.
 *   **`AnalysisAgent`**: Extended. Uses two prompt modes:
     - Detailed per-slice prompt (unchanged, but now compatible with tie-aware winners).
@@ -58,6 +59,7 @@ Identical to your current script: `Initialize -> Slice Data -> Concurrently Vali
     1. Aggregates quantitative results into `quantitative_results.json`.
     2. Aggregates per-slice qualitative reports into `qualitative_analysis.json`.
     3. Aggregates overall language-level qualitative reports into `overall_qualitative_analysis.json`.
+    4. Emits helper CSV `RLHF_data_analyzed_by_topic.csv` (wide format only) for quick visual inspection while building graphs.
 
 **Data Contracts:**
 
@@ -66,36 +68,54 @@ Identical to your current script: `Initialize -> Slice Data -> Concurrently Vali
     - `is_tie`: boolean
     - If `false`: `winner`, `winner_5s`, `winner_4s`, `winner_3s`, `ranking`
     - If `true`: `winners` (array of `{ model, score_5, score_4, score_3, total_scores }`), `top_5s`, `ranking`
+  - Per-topic breakdown (new):
+    - `topics`:
+      - Keys are topic names from the CSV
+      - Values are per-model distributions for the specific `dimension`, e.g.:
+        ```json
+        "topics": {
+          "Adaptive Quiz Engine": {
+            "Gemini": {"total_scores": 3, "score_5": 3, "score_4": 0, ...},
+            "Claude": {"total_scores": 3, "score_5": 3, ...}
+          },
+          "Knowledge Graph Recommendations": { ... }
+        }
+        ```
 
 - `qualitative_analysis.json` (Per-slice contract; unchanged keys)
-  ```json
-  [
-    {
-      "analysis_id": "Python-FinTech-Completeness",
-      "language": "Python",
-      "domain": "FinTech",
-      "dimension": "Completeness",
-      "winner_text": "The winner is Claude Opus 4. It achieves...",
-      "client_performance_text": "Gemini 2.5 pro has the following performance...",
-      "is_error": false
-    }
-  ]
-  ```
+```json
+[
+  {
+    "analysis_id": "Python-FinTech-Completeness",
+    "language": "Python",
+    "domain": "FinTech",
+    "dimension": "Completeness",
+    "winner_text": "The winner is Claude Opus 4. It achieves...",
+    "client_performance_text": "Gemini 2.5 pro has the following performance...",
+    "is_error": false
+  }
+]
+```
 
 - `overall_qualitative_analysis.json` (New overall contract)
-  ```json
-  [
-    {
-      "analysis_id": "Python-ALL-Relevance",
-      "language": "Python",
-      "domain": "ALL",
-      "dimension": "Relevance",
-      "winner_text": "Machine Learning: The top performer is Claude Opus 4. FinTech: The top performer is OpenAI o4-mini-high. EdTech: The top performers are Gemini 2.5 pro and Claude Opus 4 (tie).",
-      "client_performance_text": "Overall, Gemini 2.5 pro ... (single concise paragraph, no bullets, no prompt IDs)",
-      "is_error": false
-    }
-  ]
-  ```
+```json
+[
+  {
+    "analysis_id": "Python-ALL-Relevance",
+    "language": "Python",
+    "domain": "ALL",
+    "dimension": "Relevance",
+    "winner_text": "Machine Learning: The top performer is Claude Opus 4. FinTech: The top performer is OpenAI o4-mini-high. EdTech: The top performers are Gemini 2.5 pro and Claude Opus 4 (tie).",
+    "client_performance_text": "Overall, Gemini 2.5 pro ... (single concise paragraph, no bullets, no prompt IDs)",
+    "is_error": false
+  }
+]
+```
+
+- `RLHF_data_analyzed_by_topic.csv` (Helper CSV; wide format only)
+  - Columns: `Code Language, Industry, Topic, Prompt ID, <Model> - <Dimension> (count of 5s)` repeated for every present model and dimension.
+  - Example headers: `Gemini - Relevance (count of 5s)`, `Claude - Completeness (count of 5s)`
+  - Note: `RLHF_data_analyzed_by_topic_long.csv` is intentionally not produced.
 
 The `analysis_id` remains the shared key. For overall entries it is built as `"<Language>-ALL-<Dimension>"`.
 
@@ -115,7 +135,7 @@ This is a new, agentic script dedicated solely to producing all required visuali
     *   **Responsibilities:**
         1.  Reads configuration settings (e.g., input data paths, output directories).
         2.  Loads the `quantitative_results.json` file.
-        3.  Loads the master `.csv` file.
+        3.  Loads the master `.csv` file and/or helper CSV `RLHF_data_analyzed_by_topic.csv`.
         4.  Initializes and calls the other graphing agents in the correct order.
         5.  Reports on success or failure of the graph generation process.
 
@@ -124,7 +144,7 @@ This is a new, agentic script dedicated solely to producing all required visuali
     *   **Responsibilities:**
         1.  Receives the data from `quantitative_results.json`.
         2.  Iterates through each `domain-language-dimension` combination present in the data.
-        3.  For each combination, it generates a bar chart (like the `Python - FinTech` example) using `matplotlib/seaborn`.
+        3.  For each combination, it generates a bar chart of count of 5s (and optionally per-topic bars via the `topics` field) using `matplotlib/seaborn`.
         4.  **Crucially, it saves each chart using the shared key:** The file is saved to `output/graphs/drilldown/<analysis_id>.png`. For example: `output/graphs/drilldown/Python-FinTech-Completeness.png`.
         5.  This process can be parallelized for efficiency.
 
@@ -154,7 +174,7 @@ This script is the final stage. It embodies your proposed document assembly work
     *   **Purpose:** The master agent that orchestrates the entire document creation process.
     *   **Responsibilities:**
         1.  Initializes a new `docx` document object.
-        2.  Loads all necessary data: `qualitative_analysis.json`, `overall_qualitative_analysis.json` (for executive summaries) and `quantitative_results.json`.
+        2.  Loads all necessary data: `qualitative_analysis.json`, `overall_qualitative_analysis.json` (for executive summaries) and `quantitative_results.json` (including the `topics` map for per-topic charts).
         3.  Calls the other "Writer" agents in the correct sequence, passing them the document object and the relevant data.
         4.  Applies final touches like headers, footers, and page numbers.
         5.  Saves the final `Final_Analysis_Report.docx`.
@@ -187,4 +207,4 @@ This script is the final stage. It embodies your proposed document assembly work
 
 *   **`RecommendationWriterAgent` (The Strategist):**
     *   **Purpose:** Writes the concluding sections.
-    *   **Responsibilities:** Adds the "Conclusion" and "Recommendations" sections, optionally leveraging `overall_qualitative_analysis.json` to summarize language-level insights before proposing next steps.
+    *   **Responsibilities:** Adds the "Conclusion" and "Recommendations" sections, optionally leveraging `overall_qualitative_analysis.json` and per-topic insights to summarize language-level learnings before proposing next steps.

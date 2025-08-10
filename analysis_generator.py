@@ -58,7 +58,8 @@ COLUMN_NAMES = {
     'language': 'Code Language',
     'domain': 'Industry',
     'prompt_id': 'Prompt ID',
-    'prompt': 'Prompt'
+    'prompt': 'Prompt',
+    'topic': 'Topic'
 }
 
 log_lock = threading.Lock()
@@ -216,6 +217,7 @@ class DataSlicerTool:
             results[key] = {}
             for dimension in DIMENSIONS_TO_ANALYZE:
                 results[key][dimension] = {}
+                # Per-model aggregate (backward-compatible flat layout)
                 for model_name in MODEL_NAMES:
                     score_col = f"{model_name} Human {dimension}"
                     if score_col in group_df.columns:
@@ -230,6 +232,33 @@ class DataSlicerTool:
                             'score_1': int(score_counts.get(1, 0)),
                             'distribution': {int(k): int(v) for k, v in score_counts.items()}
                         }
+                # Per-topic breakdown by model (for graphing)
+                topics_map: Dict[str, Dict[str, Any]] = {}
+                topic_col = COLUMN_NAMES.get('topic')
+                if topic_col and topic_col in group_df.columns:
+                    for topic_value, topic_df in group_df.groupby(topic_col):
+                        # Skip NaN topic values
+                        if pd.isna(topic_value):
+                            continue
+                        per_model: Dict[str, Any] = {}
+                        for model_name in MODEL_NAMES:
+                            score_col = f"{model_name} Human {dimension}"
+                            if score_col in topic_df.columns:
+                                t_scores = topic_df[score_col].dropna()
+                                t_counts = Counter(t_scores)
+                                per_model[model_name] = {
+                                    'total_scores': int(len(t_scores)),
+                                    'score_5': int(t_counts.get(5, 0)),
+                                    'score_4': int(t_counts.get(4, 0)),
+                                    'score_3': int(t_counts.get(3, 0)),
+                                    'score_2': int(t_counts.get(2, 0)),
+                                    'score_1': int(t_counts.get(1, 0)),
+                                    'distribution': {int(k): int(v) for k, v in t_counts.items()}
+                                }
+                        if per_model:
+                            topics_map[str(topic_value)] = per_model
+                if topics_map:
+                    results[key][dimension]['topics'] = topics_map
         winners = self._determine_winners(results)
         self.quantitative_results = results
         self.quantitative_winners = winners
@@ -241,6 +270,11 @@ class DataSlicerTool:
             for dimension, models in dimensions.items():
                 model_scores = []
                 for model_name, scores in models.items():
+                    # Skip non-model buckets such as 'topics'
+                    if model_name == 'topics' or not isinstance(scores, dict):
+                        continue
+                    if 'score_5' not in scores:
+                        continue
                     model_scores.append((
                         model_name,
                         scores['score_5'],
@@ -703,12 +737,18 @@ class ReportAggregator:
             for dimension, models in dims.items():
                 analysis_id = make_analysis_id(language, domain, dimension)
                 winner_info = self.slicer.quantitative_winners.get(domain_lang, {}).get(dimension, {})
+                # Separate topics if present
+                topics_payload = {}
+                if 'topics' in models:
+                    topics_payload = models['topics']
+                    models = {k: v for k, v in models.items() if k != 'topics'}
                 entries.append({
                     'analysis_id': analysis_id,
                     'language': language,
                     'domain': domain,
                     'dimension': dimension,
                     'models': models,
+                    'topics': topics_payload,
                     'winner': winner_info
                 })
         self.quantitative_entries = entries
@@ -745,6 +785,49 @@ class ReportAggregator:
         print(f"Wrote quantitative -> {OUTPUT_QUANTITATIVE_JSON}")
         print(f"Wrote qualitative -> {OUTPUT_QUALITATIVE_JSON}")
         print(f"Wrote overall qualitative -> {OUTPUT_OVERALL_QUAL_JSON}")
+
+    def write_topic_csvs(self, master_df: pd.DataFrame) -> None:
+        """Generate a helper CSV grouped by Topic similar to RLHF_data_analyzed_by_topic.csv (wide format only)."""
+        ensure_dirs()
+        # Determine models/dimensions present
+        models_present: List[str] = []
+        for m in MODEL_NAMES:
+            for d in DIMENSIONS_TO_ANALYZE:
+                if f"{m} Human {d}" in master_df.columns:
+                    models_present.append(m)
+                    break
+        models_present = list(dict.fromkeys(models_present))  # dedupe preserve order
+
+        # Column names
+        lang_col = COLUMN_NAMES['language']
+        ind_col = COLUMN_NAMES['domain']
+        topic_col = COLUMN_NAMES['topic']
+        pid_col = COLUMN_NAMES['prompt_id']
+        required_cols = [c for c in [lang_col, ind_col, topic_col, pid_col] if c in master_df.columns]
+        if len(required_cols) < 4:
+            # Missing structural columns; skip
+            return
+
+        rows_wide: List[Dict[str, Any]] = []
+        for (language, industry, topic, prompt_id), gdf in master_df.groupby([lang_col, ind_col, topic_col, pid_col]):
+            row = {
+                'Code Language': language,
+                'Industry': industry,
+                'Topic': topic,
+                'Prompt ID': prompt_id,
+            }
+            for m in models_present:
+                for d in DIMENSIONS_TO_ANALYZE:
+                    col = f"{m} Human {d}"
+                    header = f"{m} - {d} (count of 5s)"
+                    count5 = int((gdf[col] == 5).sum()) if col in gdf.columns else 0
+                    row[header] = count5
+            rows_wide.append(row)
+
+        # Write wide file only
+        wide_path = os.path.join(DATA_DIR, 'RLHF_data_analyzed_by_topic.csv')
+        pd.DataFrame(rows_wide).to_csv(wide_path, index=False)
+        print(f"Wrote helper CSV -> {wide_path}")
 
 
 # ---------------------------------------------------------------------------------
@@ -809,8 +892,13 @@ def main():
     agg.collect_quantitative()
     agg.collect_qualitative(completed)
     agg.save_json_contracts()
+    # Write helper CSVs for graph building
+    try:
+        agg.write_topic_csvs(master_df)
+    except Exception as e:
+        print(f"⚠️ Skipped writing helper topic CSVs due to error: {e}")
     print("🎉 analysis_generator complete")
 
 
 if __name__ == "__main__":
-    main() 
+    main()      

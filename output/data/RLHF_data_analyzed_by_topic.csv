@@ -1,0 +1,11 @@
+Code Language,Industry,Topic,Prompt ID,Chatgpt - Relevance (count of 5s),Chatgpt - Correctness (count of 5s),Chatgpt - Completeness (count of 5s),Gemini - Relevance (count of 5s),Gemini - Correctness (count of 5s),Gemini - Completeness (count of 5s),Claude - Relevance (count of 5s),Claude - Correctness (count of 5s),Claude - Completeness (count of 5s)
+Python,EdTech,Adaptive Quiz Engine,368,3,0,0,3,0,0,3,1,3
+Python,EdTech,Knowledge Graph Recommendations,369,2,1,0,3,2,0,3,1,0
+Python,FinTech,Credit‑Card Fraud Detection,367,2,1,1,1,1,0,1,0,0
+Python,FinTech,Option Pricing via Monte Carlo,366,2,2,2,0,0,0,1,0,2
+Python,FinTech,Portfolio Optimization,365,2,0,0,1,0,1,3,2,2
+Python,Machine Learning,Few‑Shot Text Classification,361,1,0,0,2,0,0,2,2,1
+Python,Machine Learning,Image Captioning with CNN+RNN,362,3,0,1,3,1,0,3,1,1
+Python,Machine Learning,Reinforcement Learning for Grid Navigation,363,3,0,0,3,2,2,3,0,1
+Python,Machine Learning,Time‑Series Anomaly Detection,360,2,0,0,2,2,2,2,2,2
+Python,Machine Learning,Unsupervised Representation Learning,364,3,0,0,2,0,1,3,1,1
