@@ -1,0 +1,31 @@
+Code Language,Prompt ID,Domain,Subtopic,Chat GPT o4 mini-high Codebleu Score,Gemini 2.5 pro Codebleu Score,Claude Opus 4 Codebleu Score
+Python,360,Machine Learning,Time‑Series Anomaly Detection,0.2037415,0.2354743,0.276803
+Python,361,Machine Learning,Few‑Shot Text Classification,0.1964369,0.2684821,0.3253982
+Python,362,Machine Learning,Image Captioning with CNN+RNN,0.3221462,0.3016017,0.4039586
+Python,363,Machine Learning,Reinforcement Learning for Grid Navigation,0.1860842,0.2027707,0.2714231
+Python,364,Machine Learning,Unsupervised Representation Learning,0.2909091,0.2288836,0.3522699
+Python,365,FinTech,Portfolio Optimization,0.2981106,0.3265855,0.4450649
+Python,366,FinTech,Option Pricing via Monte Carlo,0.2626403,0.2507587,0.333674
+Python,367,FinTech,Credit‑Card Fraud Detection,0.3806208,0.2670715,0.4444918
+Python,368,EdTech,Adaptive Quiz Engine,0.2159549,0.3451811,0.4186312
+Python,369,EdTech,Knowledge Graph Recommendations,0.3675552,0.3401301,0.403451
+Python,360,Machine Learning,Time‑Series Anomaly Detection,0.4,0.0,0.0
+Python,361,Machine Learning,Few‑Shot Text Classification,0.67,0.3252514,0.718244
+Python,362,Machine Learning,Image Captioning with CNN+RNN,0.4,0.0,0.0
+Python,363,Machine Learning,Reinforcement Learning for Grid Navigation,0.4,0.0,0.0
+Python,364,Machine Learning,Unsupervised Representation Learning,0.4,0.0,0.0
+Python,365,FinTech,Portfolio Optimization,0.0,0.0,0.0
+Python,366,FinTech,Option Pricing via Monte Carlo,0.4,0.0,0.0
+Python,367,FinTech,Credit‑Card Fraud Detection,0.4,0.0,0.0
+Python,368,EdTech,Adaptive Quiz Engine,0.4,0.0,0.0
+Python,369,EdTech,Knowledge Graph Recommendations,0.0,0.0,0.0
+Python,360,Machine Learning,Time‑Series Anomaly Detection,0.4,0.2359227,0.2770891
+Python,361,Machine Learning,Few‑Shot Text Classification,0.4,0.0,0.0
+Python,362,Machine Learning,Image Captioning with CNN+RNN,0.4,0.0,0.0
+Python,363,Machine Learning,Reinforcement Learning for Grid Navigation,0.4,0.0,0.0
+Python,364,Machine Learning,Unsupervised Representation Learning,0.0,0.0,0.0
+Python,365,FinTech,Portfolio Optimization,0.4,0.0,0.0
+Python,366,FinTech,Option Pricing via Monte Carlo,0.4,0.0,0.0
+Python,367,FinTech,Credit‑Card Fraud Detection,0.4,0.0,0.0
+Python,368,EdTech,Adaptive Quiz Engine,0.4,0.0,0.0
+Python,369,EdTech,Knowledge Graph Recommendations,0.4,0.0,0.0

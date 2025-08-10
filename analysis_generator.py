@@ -28,6 +28,14 @@ MASTER_CSV_PATH = 'GRT Operations (operations.grt) (8).csv'
 OUTPUT_QUANTITATIVE_JSON = os.path.join(DATA_DIR, 'quantitative_results.json')
 OUTPUT_QUALITATIVE_JSON = os.path.join(DATA_DIR, 'qualitative_analysis.json')
 OUTPUT_OVERALL_QUAL_JSON = os.path.join(DATA_DIR, 'overall_qualitative_analysis.json')
+# System-eval outputs (CodeBLEU and related metrics)
+OUTPUT_SYSTEM_QUANT_JSON = os.path.join(DATA_DIR, 'system_quantitative_results.json')
+OUTPUT_SYSTEM_QUAL_JSON = os.path.join(DATA_DIR, 'system_qualitative_analysis.json')
+# System-eval CSV outputs for easy verification/graphing
+OUTPUT_SYSTEM_QUANT_CSV = os.path.join(DATA_DIR, 'system_quantitative_results.csv')
+OUTPUT_SYSTEM_QUAL_CSV = os.path.join(DATA_DIR, 'system_qualitative_analysis.csv')
+# Sample-style RLHF system eval CSV (per-prompt rows)
+OUTPUT_RLHF_SYSTEM_EVALS_CSV = os.path.join(DATA_DIR, 'RLHF data - System evals.csv')
 
 DIMENSIONS_TO_ANALYZE = ['Relevance', 'Correctness', 'Completeness']
 MAX_WORKERS = 2
@@ -60,6 +68,21 @@ COLUMN_NAMES = {
     'prompt_id': 'Prompt ID',
     'prompt': 'Prompt',
     'topic': 'Topic'
+}
+
+# System evaluation metric columns (present in the master CSV)
+SYSTEM_METRICS = [
+    'Codebleu Score',
+    'Ngram Score',
+    'Weight Ngram Score',
+    'Dataflow Match Score'
+]
+
+# Display names for system CSV header to match sample file
+SYSTEM_CSV_DISPLAY_NAMES = {
+    'Chatgpt': 'Chat GPT o4 mini-high',
+    'Gemini': 'Gemini 2.5 pro',
+    'Claude': 'Claude Opus 4'
 }
 
 log_lock = threading.Lock()
@@ -112,6 +135,26 @@ class AnalysisState:
             self.data_slice = pd.DataFrame()
 
 
+# System evaluation state for CodeBLEU and related metrics
+@dataclass
+class SystemAnalysisState:
+    language: str
+    domain: str
+    data_slice: pd.DataFrame
+    system_context: Dict[str, Any] = field(default_factory=dict)
+    is_data_valid: bool = False
+    eda_report: str = ""
+    analysis_report: str = ""
+    error_message: str = ""
+    validation_warnings: List[str] = field(default_factory=list)
+    winner_text: str = ""
+    client_performance_text: str = ""
+
+    def __post_init__(self):
+        if not isinstance(self.data_slice, pd.DataFrame):
+            self.data_slice = pd.DataFrame()
+
+
 # ---------------------------------------------------------------------------------
 # Step 2 (Why): Environment setup for Gemini API used by AnalysisAgent
 # ---------------------------------------------------------------------------------
@@ -137,6 +180,8 @@ class ConfigurationAgent:
         # Step 3.1 (Done): Initialize containers for availability reporting.
         self.available_models: List[str] = []
         self.available_dimensions_by_model: Dict[str, List[str]] = {}
+        # System metrics availability
+        self.available_system_metrics_by_model: Dict[str, List[str]] = {}
 
     def validate_master_csv_schema(self, file_path: str) -> bool:
         try:
@@ -177,10 +222,18 @@ class ConfigurationAgent:
             self.available_models = sorted(present_models)
             self.available_dimensions_by_model = {m: dims_by_model.get(m, []) for m in MODEL_NAMES}
 
+            # Detect available system metrics per model (optional, does not affect pass/fail)
+            sys_avail: Dict[str, List[str]] = {m: [] for m in MODEL_NAMES}
+            for model_name in MODEL_MAPPING.keys():
+                for metric in SYSTEM_METRICS:
+                    if f"{model_name} {metric}" in df.columns:
+                        sys_avail[model_name].append(metric)
+            self.available_system_metrics_by_model = sys_avail
+
             self.validated_schema = True
             print(
                 f"Schema validation passed. Rows={len(df)}, Cols={len(df.columns)} | "
-                f"Available models={self.available_models}"
+                f"Available models={self.available_models} | System metrics={self.available_system_metrics_by_model}"
             )
             return True
         except FileNotFoundError:
@@ -206,6 +259,9 @@ class DataSlicerTool:
     def __init__(self):
         self.quantitative_results: Dict[str, Dict[str, Any]] = {}
         self.quantitative_winners: Dict[str, Dict[str, Any]] = {}
+        # System-eval aggregates
+        self.system_results: Dict[str, Dict[str, Any]] = {}
+        self.system_winners: Dict[str, Dict[str, Any]] = {}
 
     def compute_quantitative_analysis(self, df: pd.DataFrame) -> None:
         results: Dict[str, Dict[str, Any]] = {}
@@ -320,6 +376,65 @@ class DataSlicerTool:
                     }
         return winners
 
+    # System evaluation: compute aggregates across metrics per (language, domain)
+    def compute_system_evaluation(self, df: pd.DataFrame) -> None:
+        sys_results: Dict[str, Dict[str, Any]] = {}
+        for (language, domain), group_df in df.groupby([COLUMN_NAMES['language'], COLUMN_NAMES['domain']]):
+            if pd.isna(language) or pd.isna(domain):
+                continue
+            key = f"{domain} ({language})"
+            metric_block: Dict[str, Any] = {}
+            # Per-model metric aggregates (mean/std/count)
+            for model_name in MODEL_NAMES:
+                per_metric: Dict[str, Any] = {}
+                for metric in SYSTEM_METRICS:
+                    col = f"{model_name} {metric}"
+                    if col in group_df.columns:
+                        series = pd.to_numeric(group_df[col], errors='coerce').dropna()
+                        if len(series) > 0:
+                            per_metric[metric] = {
+                                'mean': float(series.mean()),
+                                'std': float(series.std(ddof=0)) if len(series) > 1 else 0.0,
+                                'count': int(series.shape[0])
+                            }
+                if per_metric:
+                    metric_block[model_name] = per_metric
+            if metric_block:
+                sys_results[key] = {'metrics': metric_block}
+        self.system_results = sys_results
+        self.system_winners = self._determine_system_winners(sys_results)
+
+    def _determine_system_winners(self, sys_results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        winners: Dict[str, Dict[str, Any]] = {}
+        for domain_lang, payload in sys_results.items():
+            metric_block = payload.get('metrics', {})
+            # Determine winner by highest mean CodeBLEU
+            table = []
+            for model_name, metrics in metric_block.items():
+                codebleu = metrics.get('Codebleu Score', {}).get('mean', None)
+                if codebleu is not None:
+                    table.append((model_name, codebleu))
+            if not table:
+                continue
+            table.sort(key=lambda x: x[1], reverse=True)
+            top_score = table[0][1]
+            tied = [m for m in table if m[1] == top_score]
+            if len(tied) == 1:
+                winners[domain_lang] = {
+                    'is_tie': False,
+                    'winner': tied[0][0],
+                    'winner_codebleu': tied[0][1],
+                    'ranking': [m[0] for m in table]
+                }
+            else:
+                winners[domain_lang] = {
+                    'is_tie': True,
+                    'winners': [{'model': m[0], 'codebleu': m[1]} for m in tied],
+                    'top_codebleu': top_score,
+                    'ranking': [m[0] for m in table]
+                }
+        return winners
+
     def create_overall_states(self, master_df: pd.DataFrame) -> List['AnalysisState']:
         overall_states: List[AnalysisState] = []
         base_columns = [col for col in COLUMN_NAMES.values() if col in master_df.columns]
@@ -388,6 +503,38 @@ class DataSlicerTool:
         # Append overall language-level states
         states.extend(self.create_overall_states(master_df))
         return states
+
+    # Build SystemAnalysisState list per (language, domain)
+    def create_system_states(self, master_df: pd.DataFrame) -> List['SystemAnalysisState']:
+        self.compute_system_evaluation(master_df)
+        sys_states: List[SystemAnalysisState] = []
+        base_columns = [col for col in COLUMN_NAMES.values() if col in master_df.columns]
+        for (language, domain), group_df in master_df.groupby([COLUMN_NAMES['language'], COLUMN_NAMES['domain']]):
+            if pd.isna(language) or pd.isna(domain):
+                continue
+            required_columns = base_columns.copy()
+            # include system metric columns actually present
+            present_cols: List[str] = []
+            for model_name in MODEL_MAPPING.keys():
+                for metric in SYSTEM_METRICS:
+                    col = f"{model_name} {metric}"
+                    if col in master_df.columns:
+                        present_cols.append(col)
+            required_columns.extend(present_cols)
+            filtered_df = group_df[required_columns].copy()
+            domain_key = f"{domain} ({language})"
+            context = {'results': {}, 'winners': {}}
+            if domain_key in self.system_results:
+                context['results'] = {domain_key: self.system_results[domain_key]}
+            if domain_key in self.system_winners:
+                context['winners'] = {domain_key: self.system_winners[domain_key]}
+            sys_states.append(SystemAnalysisState(
+                language=str(language),
+                domain=str(domain),
+                data_slice=filtered_df,
+                system_context=context
+            ))
+        return sys_states
 
 
 # ---------------------------------------------------------------------------------
@@ -485,6 +632,61 @@ class EDAValidatorAgent:
             for w in warnings:
                 lines.append(f"   - {w}")
         return '\n'.join(lines)
+
+
+# System EDA validator for system metrics
+class SystemEDAValidator:
+    def __init__(self):
+        self.validation_rules = {
+            'min_data_points': 1
+        }
+
+    def validate_data_slice(self, state: SystemAnalysisState) -> SystemAnalysisState:
+        warnings: List[str] = []
+        if state.data_slice.empty:
+            state.is_data_valid = False
+            state.eda_report = "❌ CRITICAL: No data found for this combination."
+            state.error_message = "Empty data slice"
+            return state
+        if len(state.data_slice) < self.validation_rules['min_data_points']:
+            warnings.append(f"Low data points: {len(state.data_slice)} rows")
+        # Basic range checks for [0,1] metrics where applicable
+        range_issues: List[str] = []
+        for model_name in MODEL_NAMES:
+            for metric in SYSTEM_METRICS:
+                col = f"{model_name} {metric}"
+                if col in state.data_slice.columns:
+                    vals = pd.to_numeric(state.data_slice[col], errors='coerce').dropna()
+                    invalid = vals[(vals < 0) | (vals > 1)]
+                    if len(invalid) > 0:
+                        range_issues.append(f"{model_name} {metric}: {len(invalid)} values outside [0,1]")
+        warnings.extend(range_issues)
+        # EDA text
+        lines: List[str] = []
+        lines.append(f"System-Eval Data Overview for {state.domain} ({state.language})")
+        lines.append(f"   - Total data points: {len(state.data_slice)}")
+        if COLUMN_NAMES['prompt_id'] in state.data_slice.columns:
+            lines.append(f"   - Unique prompts: {state.data_slice[COLUMN_NAMES['prompt_id']].nunique()}")
+        lines.append("\nMetric Means (by model):")
+        # compute simple means per model for display
+        for model_name in MODEL_NAMES:
+            stats_parts: List[str] = []
+            for metric in SYSTEM_METRICS:
+                col = f"{model_name} {metric}"
+                if col in state.data_slice.columns:
+                    vals = pd.to_numeric(state.data_slice[col], errors='coerce').dropna()
+                    if len(vals) > 0:
+                        stats_parts.append(f"{metric}={vals.mean():.3f}")
+            if stats_parts:
+                lines.append(f"   - {MODEL_DISPLAY_NAMES[model_name]}: " + ", ".join(stats_parts))
+        if warnings:
+            lines.append("\nValidation Warnings:")
+            for w in warnings:
+                lines.append(f"   - {w}")
+        state.is_data_valid = True
+        state.validation_warnings = warnings
+        state.eda_report = '\n'.join(lines)
+        return state
 
 
 # ---------------------------------------------------------------------------------
@@ -655,6 +857,78 @@ CSV:
         return winner_line, gemini_paragraph
 
 
+# System analysis agent for CodeBLEU-style narrative
+class SystemAnalysisAgent:
+    def __init__(self):
+        self.model = genai.GenerativeModel('gemini-2.5-pro')
+
+    def generate_analysis(self, state: SystemAnalysisState) -> SystemAnalysisState:
+        try:
+            with io.StringIO() as buffer:
+                state.data_slice.to_csv(buffer, index=False)
+                csv_string = buffer.getvalue()
+            prompt = self._create_system_prompt(state, csv_string)
+            response = self.model.generate_content(prompt)
+            full_text = (response.text or "").strip()
+            state.analysis_report = full_text
+            # Parse into winner vs Gemini overview if marker exists
+            client_header = f"Overall assessment of {CLIENT_MODEL_NAME}"
+            idx = full_text.lower().find(client_header.lower())
+            if idx != -1:
+                state.winner_text = full_text[:idx].strip()
+                state.client_performance_text = full_text[idx:].strip()
+            else:
+                state.winner_text = full_text
+                state.client_performance_text = ""
+            return state
+        except Exception as e:
+            state.error_message = f"Error generating system analysis: {e}"
+            state.analysis_report = state.error_message
+            return state
+
+    def _create_system_prompt(self, state: SystemAnalysisState, csv_data: str) -> str:
+        domain_key = f"{state.domain} ({state.language})"
+        # Build metric summary from context
+        summary_lines: List[str] = []
+        winners_line = "No winner information available."
+        res = state.system_context.get('results', {}).get(domain_key, {}).get('metrics', {})
+        win = state.system_context.get('winners', {}).get(domain_key, {})
+        for model_name in MODEL_NAMES:
+            if model_name in res:
+                parts: List[str] = []
+                for metric in SYSTEM_METRICS:
+                    if metric in res[model_name]:
+                        parts.append(f"{metric}={res[model_name][metric]['mean']:.3f}")
+                if parts:
+                    summary_lines.append(f"- {MODEL_DISPLAY_NAMES[model_name]}: " + ", ".join(parts))
+        if win:
+            if win.get('is_tie'):
+                winners_line = "Winners (tie): " + ", ".join([MODEL_DISPLAY_NAMES[w['model']] for w in win.get('winners', [])]) + f" (CodeBLEU={win.get('top_codebleu'):.3f})"
+            else:
+                winners_line = f"Winner: {MODEL_DISPLAY_NAMES[win['winner']]} (CodeBLEU={win.get('winner_codebleu'):.3f})"
+
+        metric_summary = "\n".join(summary_lines) if summary_lines else "No metric summary available."
+
+        return f"""
+You are evaluating system-level code quality metrics (CodeBLEU and related sub-scores) for the '{state.domain}' industry in '{state.language}'.
+
+Context (aggregated means by model):
+{metric_summary}
+
+{winners_line}
+
+CSV (slice for this industry/language):
+```csv
+{csv_data}
+```
+
+Your Task:
+1) Write 2-3 concise sentences declaring which model leads on CodeBLEU in this industry/language and why, citing specific metric means (e.g., N-gram, Dataflow) from the context above.
+2) Then write ONE short paragraph starting with exactly: "Overall assessment of {CLIENT_MODEL_NAME}:" that describes {CLIENT_MODEL_NAME}'s system performance in this industry, highlighting one strength and one weakness based on the metrics.
+3) Keep it focused, professional, and evidence-based. No bullet points.
+"""
+
+
 # ---------------------------------------------------------------------------------
 # Step 7 (Why): Error handler for resilience
 # ---------------------------------------------------------------------------------
@@ -708,6 +982,27 @@ def create_analysis_workflow():
     return workflow.compile()
 
 
+# System analysis workflow (validate -> analysis -> end)
+
+def create_system_analysis_workflow():
+    eda = SystemEDAValidator()
+    analyst = SystemAnalysisAgent()
+
+    def eda_node(s: SystemAnalysisState) -> SystemAnalysisState:
+        return eda.validate_data_slice(s)
+
+    def analysis_node(s: SystemAnalysisState) -> SystemAnalysisState:
+        return analyst.generate_analysis(s)
+
+    workflow = StateGraph(SystemAnalysisState)
+    workflow.add_node("eda", eda_node)
+    workflow.add_node("analysis", analysis_node)
+    workflow.set_entry_point("eda")
+    workflow.add_edge("eda", "analysis")
+    workflow.add_edge("analysis", END)
+    return workflow.compile()
+
+
 # ---------------------------------------------------------------------------------
 # Step 9 (Why): Aggregator to emit JSON contracts per Arch.md
 # - quantitative_results.json: list of entries per analysis unit with scores + winners
@@ -721,6 +1016,9 @@ class ReportAggregator:
         self.quantitative_entries: List[Dict[str, Any]] = []
         self.qualitative_entries: List[Dict[str, Any]] = []
         self.overall_entries: List[Dict[str, Any]] = []
+        # System entries
+        self.system_quant_entries: List[Dict[str, Any]] = []
+        self.system_qual_entries: List[Dict[str, Any]] = []
 
     def collect_quantitative(self):
         entries: List[Dict[str, Any]] = []
@@ -774,6 +1072,42 @@ class ReportAggregator:
         self.qualitative_entries = q_entries
         self.overall_entries = overall_entries
 
+    # System aggregates collection
+    def collect_system_quantitative(self):
+        entries: List[Dict[str, Any]] = []
+        for domain_lang, payload in self.slicer.system_results.items():
+            try:
+                domain, lang_part = domain_lang.split(' (')
+                language = lang_part[:-1]
+            except Exception:
+                parts = domain_lang.split('|')
+                domain = parts[0] if parts else domain_lang
+                language = parts[1] if len(parts) > 1 else "Unknown"
+            analysis_id = make_analysis_id(language, domain, 'SYSTEM')
+            winner_info = self.slicer.system_winners.get(domain_lang, {})
+            entries.append({
+                'analysis_id': analysis_id,
+                'language': language,
+                'domain': domain,
+                'metrics': payload.get('metrics', {}),
+                'winner': winner_info
+            })
+        self.system_quant_entries = entries
+
+    def collect_system_qualitative(self, completed_states: List[SystemAnalysisState]):
+        entries: List[Dict[str, Any]] = []
+        for s in completed_states:
+            analysis_id = make_analysis_id(s.language, s.domain, 'SYSTEM')
+            entries.append({
+                'analysis_id': analysis_id,
+                'language': s.language,
+                'domain': s.domain,
+                'winner_text': s.winner_text,
+                'client_performance_text': s.client_performance_text,
+                'is_error': bool(s.error_message)
+            })
+        self.system_qual_entries = entries
+
     def save_json_contracts(self):
         ensure_dirs()
         with open(OUTPUT_QUANTITATIVE_JSON, 'w', encoding='utf-8') as f:
@@ -782,9 +1116,118 @@ class ReportAggregator:
             json.dump(self.qualitative_entries, f, indent=2, ensure_ascii=False)
         with open(OUTPUT_OVERALL_QUAL_JSON, 'w', encoding='utf-8') as f:
             json.dump(self.overall_entries, f, indent=2, ensure_ascii=False)
+        # System outputs
+        with open(OUTPUT_SYSTEM_QUANT_JSON, 'w', encoding='utf-8') as f:
+            json.dump(self.system_quant_entries, f, indent=2, ensure_ascii=False)
+        with open(OUTPUT_SYSTEM_QUAL_JSON, 'w', encoding='utf-8') as f:
+            json.dump(self.system_qual_entries, f, indent=2, ensure_ascii=False)
         print(f"Wrote quantitative -> {OUTPUT_QUANTITATIVE_JSON}")
         print(f"Wrote qualitative -> {OUTPUT_QUALITATIVE_JSON}")
         print(f"Wrote overall qualitative -> {OUTPUT_OVERALL_QUAL_JSON}")
+        print(f"Wrote system quantitative -> {OUTPUT_SYSTEM_QUANT_JSON}")
+        print(f"Wrote system qualitative -> {OUTPUT_SYSTEM_QUAL_JSON}")
+
+    # Step 9.1 (Why): Emit CSVs for system evals to simplify verification/graphing
+    # Step 9.1 (Done): Added CSV writers for system quantitative and qualitative data
+    def save_system_csvs(self) -> None:
+        ensure_dirs()
+        # Build quantitative long-format CSV rows
+        quant_rows: List[Dict[str, Any]] = []
+        for domain_lang, payload in self.slicer.system_results.items():
+            try:
+                domain, lang_part = domain_lang.split(' (')
+                language = lang_part[:-1]
+            except Exception:
+                parts = domain_lang.split('|')
+                domain = parts[0] if parts else domain_lang
+                language = parts[1] if len(parts) > 1 else "Unknown"
+            winner_info = self.slicer.system_winners.get(domain_lang, {})
+            is_tie = bool(winner_info.get('is_tie', False)) if winner_info else False
+            winner_models: List[str] = []
+            winner_codebleu: float | None = None
+            if winner_info:
+                if is_tie:
+                    winner_models = [w.get('model') for w in winner_info.get('winners', [])]
+                    winner_codebleu = winner_info.get('top_codebleu')
+                else:
+                    winner_models = [winner_info.get('winner')]
+                    winner_codebleu = winner_info.get('winner_codebleu')
+            metrics_block = payload.get('metrics', {})
+            for model_key, metrics in metrics_block.items():
+                row: Dict[str, Any] = {
+                    'Code Language': language,
+                    'Industry': domain,
+                    'Model': MODEL_DISPLAY_NAMES.get(model_key, model_key),
+                    'Model Key': model_key,
+                    'Is Winner': model_key in set(winner_models),
+                    'Is Tie': is_tie,
+                    'Winner CodeBLEU': winner_codebleu if winner_codebleu is not None else ''
+                }
+                # Flatten metric stats
+                for metric_name in SYSTEM_METRICS:
+                    stat = metrics.get(metric_name)
+                    if stat:
+                        row[f"{metric_name} Mean"] = stat.get('mean')
+                        row[f"{metric_name} Std"] = stat.get('std')
+                        row[f"{metric_name} Count"] = stat.get('count')
+                    else:
+                        row[f"{metric_name} Mean"] = ''
+                        row[f"{metric_name} Std"] = ''
+                        row[f"{metric_name} Count"] = ''
+                quant_rows.append(row)
+        if quant_rows:
+            pd.DataFrame(quant_rows).to_csv(OUTPUT_SYSTEM_QUANT_CSV, index=False)
+            print(f"Wrote system quantitative CSV -> {OUTPUT_SYSTEM_QUANT_CSV}")
+        else:
+            print("⚠️ No system quantitative data to write CSV.")
+
+        # Qualitative CSV rows from collected entries
+        if self.system_qual_entries:
+            qual_rows = []
+            for e in self.system_qual_entries:
+                qual_rows.append({
+                    'Code Language': e.get('language'),
+                    'Industry': e.get('domain'),
+                    'Winner Text': e.get('winner_text', ''),
+                    'Client Performance Text': e.get('client_performance_text', ''),
+                    'Is Error': e.get('is_error', False)
+                })
+            pd.DataFrame(qual_rows).to_csv(OUTPUT_SYSTEM_QUAL_CSV, index=False)
+            print(f"Wrote system qualitative CSV -> {OUTPUT_SYSTEM_QUAL_CSV}")
+        else:
+            print("⚠️ No system qualitative entries to write CSV.")
+
+    # Step 9.2 (Why): Emit an RLHF-style per-prompt system eval CSV matching the provided sample structure
+    # Columns: Code Language, Prompt ID, Domain, Subtopic, <Display> Codebleu Score (per model)
+    def write_rlhf_system_evals_csv(self, master_df: pd.DataFrame) -> None:
+        ensure_dirs()
+        lang_col = COLUMN_NAMES['language']
+        pid_col = COLUMN_NAMES['prompt_id']
+        ind_col = COLUMN_NAMES['domain']
+        topic_col = COLUMN_NAMES['topic']
+        # Required structure must exist; otherwise skip gracefully
+        missing = [c for c in [lang_col, pid_col, ind_col, topic_col] if c not in master_df.columns]
+        if missing:
+            print(f"⚠️ Skipping RLHF system eval CSV; missing base columns: {missing}")
+            return
+        # Build rows
+        rows: List[Dict[str, Any]] = []
+        for _, row in master_df.iterrows():
+            out_row: Dict[str, Any] = {
+                'Code Language': row.get(lang_col),
+                'Prompt ID': row.get(pid_col),
+                'Domain': row.get(ind_col),
+                'Subtopic': row.get(topic_col)
+            }
+            # Per-model Codebleu Score columns in master: e.g., 'Chatgpt Codebleu Score'
+            for model_key in MODEL_NAMES:
+                source_col = f"{model_key} Codebleu Score"
+                display_name = SYSTEM_CSV_DISPLAY_NAMES.get(model_key, model_key)
+                dest_col = f"{display_name} Codebleu Score"
+                out_row[dest_col] = row.get(source_col) if source_col in master_df.columns else ''
+            rows.append(out_row)
+        pd.DataFrame(rows).to_csv(OUTPUT_RLHF_SYSTEM_EVALS_CSV, index=False)
+        print(f"Wrote RLHF system evals CSV -> {OUTPUT_RLHF_SYSTEM_EVALS_CSV}")
 
     def write_topic_csvs(self, master_df: pd.DataFrame) -> None:
         """Generate a helper CSV grouped by Topic similar to RLHF_data_analyzed_by_topic.csv (wide format only)."""
@@ -853,23 +1296,23 @@ def main():
         print(f"❌ Failed to load master CSV: {e}")
         return
 
-    # Create states
+    # Create states (human eval)
     slicer = DataSlicerTool()
     states = slicer.create_analysis_states(master_df)
     if not states:
-        print("❌ No analysis states created. Exiting.")
+        print("❌ No analysis states created (human eval). Exiting.")
         return
 
-    # Compile workflow
+    # Compile workflows
     workflow = create_analysis_workflow()
+    system_workflow = create_system_analysis_workflow()
 
-    # Execute in parallel
+    # Execute human analyses in parallel
     completed: List[AnalysisState] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.optimal_workers) as executor:
         futures = [executor.submit(lambda st: workflow.invoke(st), s) for s in states]
         for fut in concurrent.futures.as_completed(futures):
             res = fut.result()
-            # LangGraph may return dict-like. Normalize to AnalysisState
             if isinstance(res, dict):
                 s = AnalysisState(
                     language=res.get('language', 'Unknown'),
@@ -887,11 +1330,49 @@ def main():
             else:
                 completed.append(res)
 
+    # Prepare and execute system analyses (per language/domain)
+    system_states = slicer.create_system_states(master_df)
+    completed_system: List[SystemAnalysisState] = []
+    if system_states:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.optimal_workers) as executor:
+            futures = [executor.submit(lambda st: system_workflow.invoke(st), s) for s in system_states]
+            for fut in concurrent.futures.as_completed(futures):
+                res = fut.result()
+                if isinstance(res, dict):
+                    s = SystemAnalysisState(
+                        language=res.get('language', 'Unknown'),
+                        domain=res.get('domain', 'Unknown'),
+                        data_slice=pd.DataFrame(),
+                    )
+                    s.eda_report = res.get('eda_report', '')
+                    s.analysis_report = res.get('analysis_report', '')
+                    s.error_message = res.get('error_message', '')
+                    s.winner_text = res.get('winner_text', '')
+                    s.client_performance_text = res.get('client_performance_text', '')
+                    completed_system.append(s)
+                else:
+                    completed_system.append(res)
+    else:
+        print("⚠️ No system evaluation states created (missing CodeBLEU columns?). Skipping system analysis.")
+
     # Aggregate and save contracts
     agg = ReportAggregator(slicer)
     agg.collect_quantitative()
     agg.collect_qualitative(completed)
+    # System aggregates
+    agg.collect_system_quantitative()
+    agg.collect_system_qualitative(completed_system)
     agg.save_json_contracts()
+    # Also emit CSV files for system evals
+    try:
+        agg.save_system_csvs()
+    except Exception as e:
+        print(f"⚠️ Failed writing system CSVs: {e}")
+    # Write RLHF-style system eval CSV (per-prompt)
+    try:
+        agg.write_rlhf_system_evals_csv(master_df)
+    except Exception as e:
+        print(f"⚠️ Skipped writing RLHF system eval CSV due to error: {e}")
     # Write helper CSVs for graph building
     try:
         agg.write_topic_csvs(master_df)
