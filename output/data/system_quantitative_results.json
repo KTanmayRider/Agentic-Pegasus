@@ -1,0 +1,251 @@
+[
+  {
+    "analysis_id": "Python-EdTech-SYSTEM",
+    "language": "Python",
+    "domain": "EdTech",
+    "metrics": {
+      "Chatgpt": {
+        "Codebleu Score": {
+          "mean": 0.29725168333333335,
+          "std": 0.14808891721645273,
+          "count": 6
+        },
+        "Ngram Score": {
+          "mean": 0.010840916666666667,
+          "std": 0.016315783442668503,
+          "count": 6
+        },
+        "Weight Ngram Score": {
+          "mean": 0.017149483333333333,
+          "std": 0.026294287786920355,
+          "count": 6
+        },
+        "Dataflow Match Score": {
+          "mean": 0.050279333333333336,
+          "std": 0.11242800719670444,
+          "count": 6
+        }
+      },
+      "Gemini": {
+        "Codebleu Score": {
+          "mean": 0.11421853333333333,
+          "std": 0.16153597978072531,
+          "count": 6
+        },
+        "Ngram Score": {
+          "mean": 0.01014185,
+          "std": 0.014475749245289517,
+          "count": 6
+        },
+        "Weight Ngram Score": {
+          "mean": 0.02128515,
+          "std": 0.033321638571142224,
+          "count": 6
+        },
+        "Dataflow Match Score": {
+          "mean": 0.09290876666666666,
+          "std": 0.13142433414962473,
+          "count": 6
+        }
+      },
+      "Claude": {
+        "Codebleu Score": {
+          "mean": 0.1370137,
+          "std": 0.1938161788432104,
+          "count": 6
+        },
+        "Ngram Score": {
+          "mean": 0.013795733333333332,
+          "std": 0.019534180216794927,
+          "count": 6
+        },
+        "Weight Ngram Score": {
+          "mean": 0.030802866666666668,
+          "std": 0.04568827871108981,
+          "count": 6
+        },
+        "Dataflow Match Score": {
+          "mean": 0.1363571,
+          "std": 0.1938976983414192,
+          "count": 6
+        }
+      }
+    },
+    "winner": {
+      "is_tie": false,
+      "winner": "Chatgpt",
+      "winner_codebleu": 0.29725168333333335,
+      "ranking": [
+        "Chatgpt",
+        "Claude",
+        "Gemini"
+      ]
+    }
+  },
+  {
+    "analysis_id": "Python-FinTech-SYSTEM",
+    "language": "Python",
+    "domain": "FinTech",
+    "metrics": {
+      "Chatgpt": {
+        "Codebleu Score": {
+          "mean": 0.32681907777777774,
+          "std": 0.1253553455906828,
+          "count": 9
+        },
+        "Ngram Score": {
+          "mean": 0.00934921111111111,
+          "std": 0.020251937212383435,
+          "count": 9
+        },
+        "Weight Ngram Score": {
+          "mean": 0.013106422222222223,
+          "std": 0.02360124362263696,
+          "count": 9
+        },
+        "Dataflow Match Score": {
+          "mean": 0.06983022222222221,
+          "std": 0.1063079195241276,
+          "count": 9
+        }
+      },
+      "Gemini": {
+        "Codebleu Score": {
+          "mean": 0.09382396666666666,
+          "std": 0.13401441467186365,
+          "count": 9
+        },
+        "Ngram Score": {
+          "mean": 0.014337555555555557,
+          "std": 0.0230878585116897,
+          "count": 9
+        },
+        "Weight Ngram Score": {
+          "mean": 0.021924444444444444,
+          "std": 0.03692424418349642,
+          "count": 9
+        },
+        "Dataflow Match Score": {
+          "mean": 0.034226955555555556,
+          "std": 0.06671378507596813,
+          "count": 9
+        }
+      },
+      "Claude": {
+        "Codebleu Score": {
+          "mean": 0.13591452222222222,
+          "std": 0.1945762482927667,
+          "count": 9
+        },
+        "Ngram Score": {
+          "mean": 0.029635333333333333,
+          "std": 0.050613533499867615,
+          "count": 9
+        },
+        "Weight Ngram Score": {
+          "mean": 0.038937822222222224,
+          "std": 0.0608318889965302,
+          "count": 9
+        },
+        "Dataflow Match Score": {
+          "mean": 0.11366577777777777,
+          "std": 0.16627791887542961,
+          "count": 9
+        }
+      }
+    },
+    "winner": {
+      "is_tie": false,
+      "winner": "Chatgpt",
+      "winner_codebleu": 0.32681907777777774,
+      "ranking": [
+        "Chatgpt",
+        "Claude",
+        "Gemini"
+      ]
+    }
+  },
+  {
+    "analysis_id": "Python-MachineLearning-SYSTEM",
+    "language": "Python",
+    "domain": "Machine Learning",
+    "metrics": {
+      "Chatgpt": {
+        "Codebleu Score": {
+          "mean": 0.3379545266666667,
+          "std": 0.1457927138584983,
+          "count": 15
+        },
+        "Ngram Score": {
+          "mean": 0.008044433333333333,
+          "std": 0.016243325511962,
+          "count": 15
+        },
+        "Weight Ngram Score": {
+          "mean": 0.014486913333333332,
+          "std": 0.02277450173387969,
+          "count": 15
+        },
+        "Dataflow Match Score": {
+          "mean": 0.028916113333333333,
+          "std": 0.0741402853447334,
+          "count": 15
+        }
+      },
+      "Gemini": {
+        "Codebleu Score": {
+          "mean": 0.11989243333333333,
+          "std": 0.13110634069834898,
+          "count": 15
+        },
+        "Ngram Score": {
+          "mean": 0.014429599999999999,
+          "std": 0.02040726176003695,
+          "count": 15
+        },
+        "Weight Ngram Score": {
+          "mean": 0.0187867,
+          "std": 0.022711073412500782,
+          "count": 15
+        },
+        "Dataflow Match Score": {
+          "mean": 0.029037486666666664,
+          "std": 0.06101246772534137,
+          "count": 15
+        }
+      },
+      "Claude": {
+        "Codebleu Score": {
+          "mean": 0.17501239333333332,
+          "std": 0.21239330923496771,
+          "count": 15
+        },
+        "Ngram Score": {
+          "mean": 0.08364004,
+          "std": 0.2084504254626594,
+          "count": 15
+        },
+        "Weight Ngram Score": {
+          "mean": 0.09379719333333333,
+          "std": 0.21112098272635832,
+          "count": 15
+        },
+        "Dataflow Match Score": {
+          "mean": 0.08067468,
+          "std": 0.14290386692151796,
+          "count": 15
+        }
+      }
+    },
+    "winner": {
+      "is_tie": false,
+      "winner": "Chatgpt",
+      "winner_codebleu": 0.3379545266666667,
+      "ranking": [
+        "Chatgpt",
+        "Claude",
+        "Gemini"
+      ]
+    }
+  }
+]
